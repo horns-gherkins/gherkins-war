@@ -22,6 +22,12 @@
     const JOYSTICK_REACH = 0.28;
     const MAX_TILT_ANGLE = 30;
     const MIN_TILT_ANGLE = 3;
+    const FIRE_FLASH_MS = 120;
+    const FLASH_EDGE_WIDTH = 6;
+    const FLASH_STRIPE_HEIGHT = 2;
+    const PORTAL_ANIM_MS = 180;
+    const CELL_TOP_OFFSET = 0.3;
+    const BOSS_MOVE_ANIM_MS = 150;
 
     const DIRECTIONS = {
         u: { x: 0, y: -1 },
@@ -29,6 +35,9 @@
         d: { x: 0, y: 1 },
         l: { x: -1, y: 0 },
     };
+    const OPPOSITE_DIR = { u: 'd', d: 'u', l: 'r', r: 'l' };
+
+
     const MOVE_KEYS = {
         ArrowUp: 'u',
         ArrowRight: 'r',
@@ -73,7 +82,7 @@
         d: { width: 60, bodyCenterX: 27, bodyTop: 11 },
         l: { width: 62, bodyCenterX: 45, bodyTop: 11 },
         r: { width: 62, bodyCenterX: 16, bodyTop: 11 },
-        u: { width: 60, bodyCenterX: 30, bodyTop: 17 },
+        u: { width: 60, bodyCenterX: 30, bodyTop: 11 },
     };
 
     // DOM references and mutable game state.
@@ -108,6 +117,14 @@
         bossPortalLock: null,
         joystickDirection: null,
         shots: { player: null, boss: null },
+        playerFireFlash: null,
+        playerHitFlash: null,
+        bossFireFlash: null,
+        bossHitFlash: null,
+        playerSpriteBounds: null,
+        bossSpriteBounds: null,
+        flashCanvas: null,
+        wallDepthLayers: null,
         moveTimer: null,
         keyboardMoveTimer: null,
         keyboardDirection: null,
@@ -179,7 +196,7 @@
         const fieldWidth = tileSize * game.columns;
         const fieldHeight = tileSize * game.rows;
         const topGap = Math.max(0, (window.innerHeight - fieldHeight) / 2);
-        game.canvasTopPadding = tileSize * 0.3;
+        game.canvasTopPadding = tileSize * CELL_TOP_OFFSET;
 
         elements.fieldFrame.style.width = `${fieldWidth}px`;
         elements.fieldFrame.style.height = `${fieldHeight}px`;
@@ -335,10 +352,22 @@
             && !game.voidTiles.has(tileKey(x, y));
     }
 
+    function buildWallDepthLayers() {
+        game.wallDepthLayers = [];
+        for (let y = 0; y < game.rows; y++) {
+            for (let x = 0; x < game.columns; x++) {
+                if (game.walls[y][x]) {
+                    game.wallDepthLayers.push({ depth: y * 4 + 3, draw: () => drawWall(x, y) });
+                }
+            }
+        }
+    }
+
     // Canvas rendering.
     function renderLevel() {
         clearShots();
         game.characterAnimations = { player: null, boss: null };
+        buildWallDepthLayers();
         updateEntities();
     }
 
@@ -400,17 +429,7 @@
         drawTopBoundary();
         drawShot('player');
         drawShot('boss');
-        const depthLayers = [];
-        for (let y = 0; y < game.rows; y++) {
-            for (let x = 0; x < game.columns; x++) {
-                if (game.walls[y][x]) {
-                    depthLayers.push({
-                        depth: y * 4 + 3,
-                        draw: () => drawWall(x, y),
-                    });
-                }
-            }
-        }
+        const depthLayers = [...game.wallDepthLayers];
         for (const type of ['boss', 'player']) {
             const visual = getCharacterVisual(type, now);
             depthLayers.push({
@@ -505,7 +524,7 @@
     function drawWall(x, y) {
         const context = elements.fieldContext;
         const left = x * game.cellWidth;
-        const top = (y - 0.3) * game.cellHeight;
+        const top = (y - CELL_TOP_OFFSET) * game.cellHeight;
         const wallHeight = game.cellHeight * 100 / TILE_SIZE;
         context.fillStyle = '#a5aaa5';
         context.fillRect(left, top, game.cellWidth, game.cellHeight);
@@ -584,7 +603,7 @@
             };
         }
 
-        const progress = Math.min(1, (now - animation.start) / 180);
+        const progress = Math.min(1, (now - animation.start) / PORTAL_ANIM_MS);
         if (animation.phase === 'enter') {
             const easedProgress = cubicBezierProgress(progress, 0.42, 0, 1, 1);
             return {
@@ -609,45 +628,137 @@
         for (const type of ['player', 'boss']) {
             const animation = game.characterAnimations[type];
             if (!animation || animation.kind !== 'portal') continue;
-            if (animation.phase === 'enter' && now >= animation.start + 180) {
+            if (animation.phase === 'enter' && now >= animation.start + PORTAL_ANIM_MS) {
                 animation.onTeleport();
                 animation.phase = 'exit';
-                animation.start += 180;
+                animation.start += PORTAL_ANIM_MS;
             }
-            if (animation.phase === 'exit' && now >= animation.start + 180) {
+            if (animation.phase === 'exit' && now >= animation.start + PORTAL_ANIM_MS) {
                 animation.onComplete();
                 game.characterAnimations[type] = null;
             }
         }
     }
 
+    function computeSpriteTightBounds(sheetContext, sprites) {
+        const bounds = {};
+        for (const [dir, sprite] of Object.entries(sprites)) {
+            const { data } = sheetContext.getImageData(sprite.x, sprite.y, sprite.width, sprite.height);
+            let minX = sprite.width, maxX = -1, minY = sprite.height, maxY = -1;
+            const rowRight = new Array(sprite.height).fill(-1);
+            const rowLeft = new Array(sprite.height).fill(-1);
+            for (let y = 0; y < sprite.height; y++) {
+                for (let x = 0; x < sprite.width; x++) {
+                    if (data[(y * sprite.width + x) * 4 + 3] > 10) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                        if (rowLeft[y] < 0) rowLeft[y] = x;
+                        rowRight[y] = x;
+                    }
+                }
+            }
+            bounds[dir] = {
+                x: minX, y: minY,
+                w: maxX >= 0 ? maxX - minX + 1 : 0,
+                h: maxY >= 0 ? maxY - minY + 1 : 0,
+                rowRight: rowRight.slice(minY < sprite.height ? minY : 0, maxY >= 0 ? maxY + 1 : 0),
+                rowLeft: rowLeft.slice(minY < sprite.height ? minY : 0, maxY >= 0 ? maxY + 1 : 0),
+            };
+        }
+        return bounds;
+    }
+
+    function drawFlashOverlay(context, sprite, tight, drawLeft, drawTop, xScale, yScale, direction, smooth) {
+        if (!tight || tight.w <= 0 || tight.h <= 0) return;
+
+        if (direction === 'l' || direction === 'r') {
+            const rowData = direction === 'r' ? tight.rowRight : tight.rowLeft;
+            context.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            for (let i = 0; i < rowData.length; i++) {
+                const col = rowData[i];
+                if (col < 0) continue;
+                const rowY = drawTop + (tight.y + i) * yScale;
+                if (direction === 'r') {
+                    context.fillRect(drawLeft + (col + 1) * xScale - FLASH_EDGE_WIDTH, rowY, FLASH_EDGE_WIDTH, yScale);
+                } else {
+                    context.fillRect(drawLeft + col * xScale, rowY, FLASH_EDGE_WIDTH, yScale);
+                }
+            }
+            return;
+        }
+
+        // Offscreen masking keeps the highlight strictly within sprite pixels.
+        const offW = Math.ceil(tight.w * xScale);
+        const offH = Math.ceil(tight.h * yScale);
+        if (!game.flashCanvas) game.flashCanvas = document.createElement('canvas');
+        game.flashCanvas.width = offW;
+        game.flashCanvas.height = offH;
+        const offCtx = game.flashCanvas.getContext('2d');
+        offCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        if (direction === 'u') {
+            offCtx.fillRect(0, 0, offW, FLASH_STRIPE_HEIGHT);
+        } else {
+            offCtx.fillRect(0, 0, offW, offH);
+        }
+        offCtx.globalCompositeOperation = 'destination-in';
+        offCtx.imageSmoothingEnabled = smooth;
+        offCtx.drawImage(
+            game.spriteSheet,
+            sprite.x + tight.x, sprite.y + tight.y, tight.w, tight.h,
+            0, 0, offW, offH,
+        );
+        context.drawImage(
+            game.flashCanvas,
+            drawLeft + tight.x * xScale, drawTop + tight.y * yScale,
+            tight.w * xScale, tight.h * yScale,
+        );
+    }
+
     function drawCharacter(type, now, visual = getCharacterVisual(type, now)) {
         const context = elements.fieldContext;
         const character = game[type];
         const left = visual.x * game.cellWidth + visual.offsetX * game.cellWidth;
-        const top = (visual.y - 0.3) * game.cellHeight + visual.offsetY * game.cellHeight;
+        const top = (visual.y - CELL_TOP_OFFSET) * game.cellHeight + visual.offsetY * game.cellHeight;
         context.save();
         context.globalAlpha = visual.opacity;
         context.imageSmoothingEnabled = type !== 'boss';
+        const pNow = performance.now();
         if (type === 'player') {
-            drawSprite(
-                SPRITES.player[character.direction],
-                left,
-                top,
-                game.cellWidth,
-                game.cellHeight,
-            );
+            const sprite = SPRITES.player[character.direction];
+            drawSprite(sprite, left, top, game.cellWidth, game.cellHeight);
+            const tight = game.playerSpriteBounds[character.direction];
+            const xScale = game.cellWidth / TILE_SIZE;
+            const yScale = game.cellHeight / TILE_SIZE;
+            for (const key of ['playerFireFlash', 'playerHitFlash']) {
+                const flash = game[key];
+                if (!flash) continue;
+                if (pNow < flash.until) {
+                    drawFlashOverlay(context, sprite, tight, left, top, xScale, yScale, flash.direction, true);
+                } else {
+                    game[key] = null;
+                }
+            }
         } else {
             const layout = BOSS_SPRITE_LAYOUT[character.direction];
             const sprite = SPRITES.boss[character.direction];
             const scale = game.cellWidth / TILE_SIZE;
-            drawSprite(
-                sprite,
-                left + (TILE_SIZE / 2 - layout.bodyCenterX) * scale,
-                top + (11 - layout.bodyTop) * scale,
-                layout.width * scale,
-                sprite.height * scale,
-            );
+            const bossLeft = left + (TILE_SIZE / 2 - layout.bodyCenterX) * scale;
+            const bossTop = top + (11 - layout.bodyTop) * scale;
+            const bossWidth = layout.width * scale;
+            const bossHeight = sprite.height * scale;
+            drawSprite(sprite, bossLeft, bossTop, bossWidth, bossHeight);
+            const tight = game.bossSpriteBounds[character.direction];
+            for (const key of ['bossFireFlash', 'bossHitFlash']) {
+                const flash = game[key];
+                if (!flash) continue;
+                if (pNow < flash.until) {
+                    drawFlashOverlay(context, sprite, tight, bossLeft, bossTop, scale, scale, flash.direction, false);
+                } else {
+                    game[key] = null;
+                }
+            }
         }
         context.restore();
     }
@@ -808,8 +919,7 @@
         portalLock = null,
     ) {
         const foundWallPortal = wallPortalAt(movingCharacter.x, movingCharacter.y, movement);
-        const wallPortal = portalLock ? null : foundWallPortal;
-        const portal = wallPortal;
+        const portal = portalLock ? null : foundWallPortal;
         if (!portal) {
             return isWalkable(nextX, nextY)
                 && !isCharacterAt(blockingCharacter, nextX, nextY)
@@ -890,7 +1000,7 @@
             from,
             to: { x: next.x, y: next.y },
             start: performance.now(),
-            duration: movementDuration(150, startsOnWater),
+            duration: movementDuration(BOSS_MOVE_ANIM_MS, startsOnWater),
         };
         rotateWaterAt(next.x, next.y);
         updateEntities();
@@ -903,13 +1013,26 @@
             ? (dx > 0 ? 'r' : 'l')
             : (dy > 0 ? 'd' : 'u');
 
+        const until = performance.now() + FIRE_FLASH_MS;
         game.boss.direction = direction;
+        game.bossFireFlash = { direction, until };
+        const vec = DIRECTIONS[direction];
+        if (isCharacterAt(game.player, game.boss.x + vec.x, game.boss.y + vec.y)) {
+            game.playerHitFlash = { direction: OPPOSITE_DIR[direction], until };
+        }
         updateEntities();
         startShot('boss', game.boss, direction);
     }
 
     function firePlayer() {
-        startShot('player', game.player, game.player.direction, PLAYER_SHOT_RANGE);
+        const dir = game.player.direction;
+        const until = performance.now() + FIRE_FLASH_MS;
+        game.playerFireFlash = { direction: dir, until };
+        const vec = DIRECTIONS[dir];
+        if (isCharacterAt(game.boss, game.player.x + vec.x, game.player.y + vec.y)) {
+            game.bossHitFlash = { direction: OPPOSITE_DIR[dir], until };
+        }
+        startShot('player', game.player, dir, PLAYER_SHOT_RANGE);
     }
 
     // Projectiles advance one tile at a time; portal travel does not consume range.
@@ -981,12 +1104,8 @@
 
     function recordShotPosition(owner, shot) {
         shot.path.push({ x: shot.x, y: shot.y, direction: shot.direction });
-        renderShotPath(owner, shot);
-        shot.timer = setTimeout(() => advanceShot(owner, shot), shot.stepMs);
-    }
-
-    function renderShotPath(owner, shot) {
         drawField();
+        shot.timer = setTimeout(() => advanceShot(owner, shot), shot.stepMs);
     }
 
     function finishShot(owner, shot) {
@@ -1192,13 +1311,7 @@
         }
 
         game.walls = rotatedWalls;
-        game.voidTiles = new Set(
-            [...game.voidTiles].map((key) => {
-                const [x, y] = key.split(',').map(Number);
-                const rotated = rotatePosition({ x, y });
-                return tileKey(rotated.x, rotated.y);
-            }),
-        );
+        game.voidTiles = rotateKeySet(game.voidTiles, rotatePosition);
         game.player = {
             ...rotatePosition(game.player),
             direction: rotateDirection(game.player.direction, rotationTurns),
@@ -1210,21 +1323,12 @@
             ...rotatePosition(game.boss),
             direction: rotateDirection(game.boss.direction, rotationTurns),
         };
-        game.waterTiles = new Set(
-            [...game.waterTiles].map((key) => {
-                const [x, y] = key.split(',').map(Number);
-                const rotated = rotatePosition({ x, y });
-                return tileKey(rotated.x, rotated.y);
-            }),
-        );
+        game.waterTiles = rotateKeySet(game.waterTiles, rotatePosition);
         game.waterRotations = new Map(
             [...game.waterRotations].map(([key, rotation]) => {
                 const [x, y] = key.split(',').map(Number);
-                const rotated = rotatePosition({ x, y });
-                return [
-                    tileKey(rotated.x, rotated.y),
-                    (rotation + rotationTurns * 90 + 360) % 360,
-                ];
+                const r = rotatePosition({ x, y });
+                return [tileKey(r.x, r.y), (rotation + rotationTurns * 90 + 360) % 360];
             }),
         );
         game.portals = game.portals.map((portal) => {
@@ -1243,6 +1347,14 @@
         });
     }
 
+    function rotateKeySet(set, rotatePosition) {
+        return new Set([...set].map((key) => {
+            const [x, y] = key.split(',').map(Number);
+            const r = rotatePosition({ x, y });
+            return tileKey(r.x, r.y);
+        }));
+    }
+
     function portalSurface(direction) {
         return { u: 'back', r: 'right', d: 'front', l: 'left' }[direction];
     }
@@ -1254,10 +1366,7 @@
     }
 
     function getOrientationLabel() {
-        const isLandscape = window.matchMedia(ORIENTATION_QUERY).matches;
-        if (!isLandscape) return 'Portrait';
-
-        return 'Landscape';
+        return window.matchMedia(ORIENTATION_QUERY).matches ? 'Landscape' : 'Portrait';
     }
 
     function updateDebugStatus(tiltLabel = game.tiltStatus ?? 'Tilt: waiting for motion') {
@@ -1325,16 +1434,8 @@
             : (tiltStrength - MIN_TILT_ANGLE)
                 / (MAX_TILT_ANGLE - MIN_TILT_ANGLE) * 2;
 
-        const tiltSide = tilt < -MIN_TILT_ANGLE
-            ? 'left'
-            : tilt > MIN_TILT_ANGLE
-                ? 'right'
-                : null;
-        const tiltLabel = tilt < -MIN_TILT_ANGLE
-            ? 'Tilt: left'
-            : tilt > MIN_TILT_ANGLE
-                ? 'Tilt: right'
-                : 'Tilt: neutral';
+        const tiltSide = tilt < -MIN_TILT_ANGLE ? 'left' : tilt > MIN_TILT_ANGLE ? 'right' : null;
+        const tiltLabel = tiltSide ? `Tilt: ${tiltSide}` : 'Tilt: neutral';
         if (game.tiltSide !== tiltSide || Math.abs(game.tiltEdgeWidth - edgeWidth) >= 0.02) {
             game.tiltSide = tiltSide;
             game.tiltEdgeWidth = edgeWidth;
@@ -1418,6 +1519,8 @@
         }
         context.putImageData(imageData, 0, 0);
         game.spriteSheet = canvas;
+        game.playerSpriteBounds = computeSpriteTightBounds(context, SPRITES.player);
+        game.bossSpriteBounds = computeSpriteTightBounds(context, SPRITES.boss);
 
         const level = await loadRandomLevel();
         game.columns = level.columns;
