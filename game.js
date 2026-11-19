@@ -68,6 +68,18 @@
             u: { x: 380, y: 1, width: 60, height: 60 },
             r: { x: 317, y: 1, width: 62, height: 60 },
         },
+        chili: {
+            d: { x: 0, y: 239, width: 60, height: 80 },
+            r: { x: 60, y: 239, width: 60, height: 80 },
+            u: { x: 120, y: 239, width: 60, height: 80 },
+            l: { x: 180, y: 239, width: 60, height: 80 },
+        },
+        mini: {
+            d: { x: 0, y: 320, width: 60, height: 80 },
+            r: { x: 60, y: 320, width: 60, height: 80 },
+            u: { x: 120, y: 320, width: 60, height: 80 },
+            l: { x: 180, y: 320, width: 60, height: 80 },
+        },
         portal: {
             floor: { x: 0, y: 180, width: 60, height: 60 },
             left: { x: 160, y: 160, width: 20, height: 80 },
@@ -83,6 +95,18 @@
         l: { width: 62, bodyCenterX: 45, bodyTop: 11 },
         r: { width: 62, bodyCenterX: 16, bodyTop: 11 },
         u: { width: 60, bodyCenterX: 30, bodyTop: 11 },
+    };
+    const CHILI_SPRITE_LAYOUT = {
+        d: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        r: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        u: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        l: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+    };
+    const MINI_SPRITE_LAYOUT = {
+        d: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        r: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        u: { width: 60, bodyCenterX: 30, bodyTop: 13 },
+        l: { width: 60, bodyCenterX: 30, bodyTop: 13 },
     };
 
     // DOM references and mutable game state.
@@ -108,7 +132,7 @@
         waterRotations: new Map(),
         portals: [],
         player: { x: 0, y: 0, direction: 'u' },
-        boss: { x: 0, y: 0, direction: 'd' },
+        boss: { x: 0, y: 0, direction: 'd', type: 'b' },
         isJoystickHeld: false,
         lockedDirection: null,
         isPlayerTeleporting: false,
@@ -123,6 +147,8 @@
         bossHitFlash: null,
         playerSpriteBounds: null,
         bossSpriteBounds: null,
+        chiliSpriteBounds: null,
+        miniSpriteBounds: null,
         flashCanvas: null,
         wallDepthLayers: null,
         moveTimer: null,
@@ -261,7 +287,7 @@
             for (let x = 0; x < columns; x++) {
                 const token = rows[y][x];
                 const directionList = portalDirections[token];
-                if (!['_', 'p', 'b', 'w', 't', 's'].includes(token) && !directionList) {
+                if (!['_', 'p', 'b', 'c', 'm', 'w', 't', 's'].includes(token) && !directionList) {
                     throw new Error(`${path} has unknown tile "${token}" at row ${y + 1}, column ${x + 1}.`);
                 }
 
@@ -272,9 +298,9 @@
                 } else if (token === 'p') {
                     if (player) throw new Error(`${path} must contain exactly one [p] tile.`);
                     player = { x, y, direction: 'r' };
-                } else if (token === 'b') {
-                    if (boss) throw new Error(`${path} must contain exactly one [b] tile.`);
-                    boss = { x, y, direction: 'd' };
+                } else if (token === 'b' || token === 'c' || token === 'm') {
+                    if (boss) throw new Error(`${path} must contain exactly one boss tile ([b], [c], or [m]).`);
+                    boss = { x, y, direction: 'd', type: token };
                 } else if (token === 's') {
                     const key = tileKey(x, y);
                     waterTiles.add(key);
@@ -298,7 +324,7 @@
         }
 
         if (!player || !boss) {
-            throw new Error(`${path} must contain exactly one [p] and one [b] tile.`);
+            throw new Error(`${path} must contain exactly one [p] tile and one boss tile ([b], [c], or [m]).`);
         }
         for (const portal of portals) {
             const { x, y } = portal.trigger;
@@ -676,14 +702,15 @@
         if (direction === 'l' || direction === 'r') {
             const rowData = direction === 'r' ? tight.rowRight : tight.rowLeft;
             context.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            const lrEdgeWidth = FLASH_EDGE_WIDTH - 2;
             for (let i = 0; i < rowData.length; i++) {
                 const col = rowData[i];
                 if (col < 0) continue;
                 const rowY = drawTop + (tight.y + i) * yScale;
                 if (direction === 'r') {
-                    context.fillRect(drawLeft + (col + 1) * xScale - FLASH_EDGE_WIDTH, rowY, FLASH_EDGE_WIDTH, yScale);
+                    context.fillRect(drawLeft + (col + 1) * xScale - lrEdgeWidth, rowY, lrEdgeWidth, yScale);
                 } else {
-                    context.fillRect(drawLeft + col * xScale, rowY, FLASH_EDGE_WIDTH, yScale);
+                    context.fillRect(drawLeft + col * xScale, rowY, lrEdgeWidth, yScale);
                 }
             }
             return;
@@ -741,15 +768,19 @@
                 }
             }
         } else {
-            const layout = BOSS_SPRITE_LAYOUT[character.direction];
-            const sprite = SPRITES.boss[character.direction];
+            const bossType = character.type ?? 'b';
+            const spriteSet = bossType === 'c' ? SPRITES.chili : bossType === 'm' ? SPRITES.mini : SPRITES.boss;
+            const layoutSet = bossType === 'c' ? CHILI_SPRITE_LAYOUT : bossType === 'm' ? MINI_SPRITE_LAYOUT : BOSS_SPRITE_LAYOUT;
+            const boundsKey = bossType === 'c' ? 'chiliSpriteBounds' : bossType === 'm' ? 'miniSpriteBounds' : 'bossSpriteBounds';
+            const layout = layoutSet[character.direction];
+            const sprite = spriteSet[character.direction];
             const scale = game.cellWidth / TILE_SIZE;
             const bossLeft = left + (TILE_SIZE / 2 - layout.bodyCenterX) * scale;
             const bossTop = top + (11 - layout.bodyTop) * scale;
             const bossWidth = layout.width * scale;
             const bossHeight = sprite.height * scale;
             drawSprite(sprite, bossLeft, bossTop, bossWidth, bossHeight);
-            const tight = game.bossSpriteBounds[character.direction];
+            const tight = game[boundsKey]?.[character.direction];
             for (const key of ['bossFireFlash', 'bossHitFlash']) {
                 const flash = game[key];
                 if (!flash) continue;
@@ -1521,6 +1552,8 @@
         game.spriteSheet = canvas;
         game.playerSpriteBounds = computeSpriteTightBounds(context, SPRITES.player);
         game.bossSpriteBounds = computeSpriteTightBounds(context, SPRITES.boss);
+        game.chiliSpriteBounds = computeSpriteTightBounds(context, SPRITES.chili);
+        game.miniSpriteBounds = computeSpriteTightBounds(context, SPRITES.mini);
 
         const level = await loadRandomLevel();
         game.columns = level.columns;
