@@ -1353,6 +1353,7 @@
         game.boss = {
             ...rotatePosition(game.boss),
             direction: rotateDirection(game.boss.direction, rotationTurns),
+            type: game.boss.type,
         };
         game.waterTiles = rotateKeySet(game.waterTiles, rotatePosition);
         game.waterRotations = new Map(
