@@ -5,7 +5,7 @@
     const ORIENTATION_QUERY = '(orientation: landscape)';
     const TILE_SIZE = 60;
     const LEVEL_FILES = Array.from({ length: 5 }, (_, index) =>
-        `levels/dev${String(index + 1).padStart(3, '0')}.csv`);
+        `levels/dev${String(index + 1).padStart(3, '0')}.csv?v=49`);
     const WATER_ROTATIONS = [0, 90, 180, 270];
     const CHARACTER_SPEED_FACTOR = 0.67;
     const WATER_SPEED_FACTOR = 0.6;
