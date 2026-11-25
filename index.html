@@ -9,10 +9,37 @@
     <meta name="apple-mobile-web-app-title" content="Gherkins War">
     <link rel="icon" href="assets/apple-touch-icon.png" type="image/png" sizes="180x180">
     <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" sizes="180x180">
-    <link rel="stylesheet" href="style.css?v=52">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+    <link rel="stylesheet" href="style.css?v=53">
 </head>
 <body>
+    <div id="start-screen" class="start-screen" role="dialog" aria-modal="true" aria-label="Main menu">
+        <div class="start-logo">
+            <div class="start-logo-image" aria-hidden="true"></div>
+            <h1 class="start-title">Gherkins<br>War</h1>
+        </div>
+        <nav class="start-menu" aria-label="Main menu options">
+            <button id="btn-resume" class="menu-btn menu-btn--inactive" disabled aria-disabled="true">Resume</button>
+            <button id="btn-new-game" class="menu-btn">New Game</button>
+            <button id="btn-settings" class="menu-btn menu-btn--inactive" disabled aria-disabled="true">Settings</button>
+            <button id="btn-enter-code" class="menu-btn menu-btn--inactive" disabled aria-disabled="true">Enter Code</button>
+        </nav>
+    </div>
+
+    <div id="confirm-dialog" class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-msg" hidden>
+        <div class="confirm-card">
+            <p id="confirm-msg" class="confirm-msg">Restart game?</p>
+            <div class="confirm-buttons">
+                <button id="confirm-yes" class="menu-btn confirm-btn">Yes</button>
+                <button id="confirm-no" class="menu-btn confirm-btn">No</button>
+            </div>
+        </div>
+    </div>
+
     <main class="game" aria-label="Gherkins War mobile game">
+        <button id="menu-btn" class="ingame-menu-btn" aria-label="Main menu" hidden>&#9776;</button>
         <section class="arena" aria-label="Game field">
             <div id="field-frame" class="field-frame">
                 <canvas id="field" class="field" role="img" aria-label="Game map"></canvas>
@@ -48,6 +75,6 @@
             </div>
         </div>
     </main>
-    <script src="game.js?v=50"></script>
+    <script src="game.js?v=51"></script>
 </body>
 </html>

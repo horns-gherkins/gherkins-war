@@ -121,6 +121,13 @@
         debugStatus: document.querySelector('#debug-status'),
         motionPrompt: document.querySelector('#motion-prompt'),
         motionEnable: document.querySelector('#motion-enable'),
+        startScreen: document.querySelector('#start-screen'),
+        btnResume: document.querySelector('#btn-resume'),
+        btnNewGame: document.querySelector('#btn-new-game'),
+        ingameMenuBtn: document.querySelector('#menu-btn'),
+        confirmDialog: document.querySelector('#confirm-dialog'),
+        confirmYes: document.querySelector('#confirm-yes'),
+        confirmNo: document.querySelector('#confirm-no'),
     };
 
     const game = {
@@ -140,6 +147,7 @@
         playerPortalLock: null,
         bossPortalLock: null,
         joystickDirection: null,
+        paused: true,
         shots: { player: null, boss: null },
         playerFireFlash: null,
         playerHitFlash: null,
@@ -1056,6 +1064,7 @@
     }
 
     function firePlayer() {
+        if (game.paused) return;
         const dir = game.player.direction;
         const until = performance.now() + FIRE_FLASH_MS;
         game.playerFireFlash = { direction: dir, until };
@@ -1180,8 +1189,10 @@
     }
 
     function scheduleBossMove() {
+        if (game.paused) return;
         const isOnWater = game.waterTiles.has(tileKey(game.boss.x, game.boss.y));
         game.bossTimer = setTimeout(() => {
+            if (game.paused) return;
             moveBoss();
             scheduleBossMove();
         }, BOSS_STEP_MS / movementSpeedFactor(isOnWater));
@@ -1189,7 +1200,7 @@
 
     function scheduleJoystickMove(delay = getPlayerMoveDelay()) {
         game.moveTimer = setTimeout(() => {
-            if (!game.isJoystickHeld || !game.joystickDirection) return;
+            if (game.paused || !game.isJoystickHeld || !game.joystickDirection) return;
             const nextDelay = movePlayer(game.joystickDirection) ?? getPlayerMoveDelay();
             scheduleJoystickMove(nextDelay);
         }, delay);
@@ -1197,7 +1208,7 @@
 
     function scheduleKeyboardMove(delay = getPlayerMoveDelay()) {
         game.keyboardMoveTimer = setTimeout(() => {
-            if (!game.keyboardDirection) return;
+            if (game.paused || !game.keyboardDirection) return;
             const nextDelay = movePlayer(game.keyboardDirection) ?? getPlayerMoveDelay();
             scheduleKeyboardMove(nextDelay);
         }, delay);
@@ -1274,6 +1285,7 @@
     }
 
     function handleKeyDown(event) {
+        if (game.paused) return;
         const moveDirection = MOVE_KEYS[event.code];
         const turnDirection = TURN_KEYS[event.code];
 
@@ -1529,6 +1541,111 @@
         screen.orientation?.addEventListener?.('change', scheduleResize);
     }
 
+    function pauseGame() {
+        game.paused = true;
+        if (game.bossTimer) { clearTimeout(game.bossTimer); game.bossTimer = null; }
+        clearJoystickMove();
+        clearKeyboardMove();
+    }
+
+    function resumeGame() {
+        game.paused = false;
+        scheduleBossMove();
+    }
+
+    function showStartMenu(gameStarted) {
+        pauseGame();
+        elements.startScreen.removeAttribute('hidden');
+        elements.startScreen.style.display = '';
+        if (gameStarted) {
+            elements.btnResume.disabled = false;
+            elements.btnResume.setAttribute('aria-disabled', 'false');
+            elements.btnResume.classList.remove('menu-btn--inactive');
+            elements.ingameMenuBtn.hidden = true;
+        }
+    }
+
+    function hideStartMenu() {
+        elements.startScreen.hidden = true;
+        elements.startScreen.style.display = 'none';
+        elements.ingameMenuBtn.hidden = false;
+    }
+
+    async function loadNewLevel() {
+        if (game.bossTimer) { clearTimeout(game.bossTimer); game.bossTimer = null; }
+        clearJoystickMove();
+        clearKeyboardMove();
+        game.shots = { player: null, boss: null };
+        game.playerFireFlash = null;
+        game.playerHitFlash = null;
+        game.bossFireFlash = null;
+        game.bossHitFlash = null;
+        game.terrainCanvas = null;
+
+        const level = await loadRandomLevel();
+        game.columns = level.columns;
+        game.rows = level.rows;
+        game.walls = level.walls;
+        game.voidTiles = level.voidTiles;
+        game.waterTiles = level.waterTiles;
+        game.waterRotations = level.waterRotations;
+        game.portals = level.portals;
+        game.player = level.player;
+        game.boss = level.boss;
+        game.isPlayerTeleporting = false;
+        game.isBossTeleporting = false;
+        game.playerPortalLock = null;
+        game.bossPortalLock = null;
+
+        const levelColumns = game.columns;
+        const levelRows = game.rows;
+        chooseDimensions();
+        if (game.columns !== levelColumns || game.rows !== levelRows) {
+            const rotationTurns = game.columns > levelColumns ? 1 : -1;
+            rotateLevel(levelColumns, levelRows, rotationTurns);
+        }
+        renderLevel();
+        drawField();
+        updateDebugStatus();
+    }
+
+    function bindMenuControls() {
+        elements.btnNewGame.addEventListener('click', () => {
+            if (!game.spriteSheet) return;
+            const hasActiveGame = !elements.btnResume.disabled;
+            if (hasActiveGame) {
+                elements.confirmDialog.hidden = false;
+            } else {
+                void loadNewLevel().then(() => {
+                    hideStartMenu();
+                    resumeGame();
+                });
+            }
+        });
+
+        elements.btnResume.addEventListener('click', () => {
+            if (elements.btnResume.disabled) return;
+            hideStartMenu();
+            resumeGame();
+        });
+
+        elements.confirmYes.addEventListener('click', () => {
+            elements.confirmDialog.hidden = true;
+            void loadNewLevel().then(() => {
+                hideStartMenu();
+                resumeGame();
+            });
+        });
+
+        elements.confirmNo.addEventListener('click', () => {
+            elements.confirmDialog.hidden = true;
+        });
+
+        elements.ingameMenuBtn.addEventListener('click', () => {
+            showStartMenu(true);
+        });
+    }
+
     async function start() {
         const image = new Image();
         image.src = SPRITE_SHEET_PATH;
@@ -1556,26 +1673,9 @@
         game.chiliSpriteBounds = computeSpriteTightBounds(context, SPRITES.chili);
         game.miniSpriteBounds = computeSpriteTightBounds(context, SPRITES.mini);
 
-        const level = await loadRandomLevel();
-        game.columns = level.columns;
-        game.rows = level.rows;
-        game.walls = level.walls;
-        game.voidTiles = level.voidTiles;
-        game.waterTiles = level.waterTiles;
-        game.waterRotations = level.waterRotations;
-        game.portals = level.portals;
-        game.player = level.player;
-        game.boss = level.boss;
-
         bindControls();
-        const levelColumns = game.columns;
-        const levelRows = game.rows;
+        bindMenuControls();
         chooseDimensions();
-        if (game.columns !== levelColumns || game.rows !== levelRows) {
-            const rotationTurns = game.columns > levelColumns ? 1 : -1;
-            rotateLevel(levelColumns, levelRows, rotationTurns);
-        }
-        renderLevel();
         requestAnimationFrame(drawField);
         updateDebugStatus();
         if (window.DeviceOrientationEvent
@@ -1587,7 +1687,6 @@
         } else {
             updateDebugStatus('Tilt: unavailable');
         }
-        scheduleBossMove();
     }
 
     start().catch((error) => {
