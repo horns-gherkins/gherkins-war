@@ -315,7 +315,7 @@ button {
 .start-title {
     margin: 0;
     font-family: 'Press Start 2P', monospace;
-    font-size: clamp(18px, 5vw, 32px);
+    font-size: 24px;
     color: #c6f36b;
     text-align: center;
     line-height: 1.6;
@@ -331,14 +331,14 @@ button {
 
 .menu-btn {
     display: block;
-    width: 100%;
+    width: 300px;
     padding: 14px 20px;
     border: 2px solid #c6f36b;
     border-radius: 0;
     background: transparent;
     color: #c6f36b;
     font-family: 'Press Start 2P', monospace;
-    font-size: clamp(9px, 2.5vw, 13px);
+    font-size: 11px;
     text-align: center;
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
@@ -441,25 +441,12 @@ button {
         gap: 12px;
     }
 
-    .start-logo-image {
-        width: 72px;
-        height: 72px;
-    }
-
-    .start-title {
-        font-size: clamp(14px, 3vw, 24px);
-    }
-
     .start-menu {
         flex: 1 1 50%;
-        align-items: stretch;
+        align-items: center;
         justify-content: center;
         padding: 24px;
-        gap: 10px;
+        gap: 16px;
         width: auto;
-    }
-
-    .menu-btn {
-        padding: 10px 20px;
     }
 }
