@@ -223,13 +223,15 @@
         game.columns = isLandscape ? 16 : 8;
         game.rows = isLandscape ? 8 : 16;
 
+        const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+        const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
         const tileSize = Math.max(1, Math.floor(Math.min(
-            (window.innerWidth - 16) / game.columns,
-            (window.innerHeight - 16) / game.rows,
+            (vw - 16) / game.columns,
+            (vh - 16) / game.rows,
         ) - 2));
         const fieldWidth = tileSize * game.columns;
         const fieldHeight = tileSize * game.rows;
-        const topGap = Math.max(0, (window.innerHeight - fieldHeight) / 2);
+        const topGap = Math.max(0, (vh - fieldHeight) / 2);
         game.canvasTopPadding = tileSize * CELL_TOP_OFFSET;
 
         elements.fieldFrame.style.width = `${fieldWidth}px`;
