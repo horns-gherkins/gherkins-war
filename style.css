@@ -278,28 +278,6 @@ button {
     background: rgba(255, 255, 255, .16);
 }
 
-@media (orientation: landscape) {
-    .control-group {
-        bottom: env(safe-area-inset-bottom);
-    }
-
-    .start-screen {
-        flex-direction: row;
-        justify-content: space-evenly;
-        gap: 24px;
-    }
-
-    .start-logo {
-        flex: 0 1 auto;
-        justify-content: center;
-    }
-
-    .start-menu {
-        flex: 0 1 auto;
-        justify-content: center;
-    }
-}
-
 @media (max-height: 430px) and (orientation: landscape) {
     .field-frame {
         transform: translateY(-2px);
@@ -442,4 +420,46 @@ button {
     width: auto;
     min-width: 90px;
     flex: 1;
+}
+
+@media (orientation: landscape) {
+    .control-group {
+        bottom: env(safe-area-inset-bottom);
+    }
+
+    .start-screen {
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+    }
+
+    .start-logo {
+        flex: 1 1 50%;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+    }
+
+    .start-logo-image {
+        width: 72px;
+        height: 72px;
+    }
+
+    .start-title {
+        font-size: clamp(14px, 3vw, 24px);
+    }
+
+    .start-menu {
+        flex: 1 1 50%;
+        align-items: stretch;
+        justify-content: center;
+        padding: 24px;
+        gap: 10px;
+        width: auto;
+    }
+
+    .menu-btn {
+        padding: 10px 20px;
+    }
 }
