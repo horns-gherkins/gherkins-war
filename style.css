@@ -282,6 +282,22 @@ button {
     .control-group {
         bottom: env(safe-area-inset-bottom);
     }
+
+    .start-screen {
+        flex-direction: row;
+        justify-content: space-evenly;
+        gap: 24px;
+    }
+
+    .start-logo {
+        flex: 0 1 auto;
+        justify-content: center;
+    }
+
+    .start-menu {
+        flex: 0 1 auto;
+        justify-content: center;
+    }
 }
 
 @media (max-height: 430px) and (orientation: landscape) {
