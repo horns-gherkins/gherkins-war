@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
-    <link rel="stylesheet" href="style.css?v=60">
+    <link rel="stylesheet" href="style.css?v=61">
 </head>
 <body>
     <div id="start-screen" class="start-screen" role="dialog" aria-modal="true" aria-label="Main menu">
@@ -26,6 +26,26 @@
             <button id="btn-settings" class="menu-btn menu-btn--inactive" disabled aria-disabled="true">Settings</button>
             <button id="btn-enter-code" class="menu-btn menu-btn--inactive" disabled aria-disabled="true">Enter Code</button>
         </nav>
+    </div>
+
+    <div id="level-intro" class="overlay-screen" aria-live="assertive" hidden>
+        <p id="level-intro-text" class="overlay-title"></p>
+    </div>
+
+    <div id="level-complete" class="overlay-screen" role="dialog" aria-modal="true" hidden>
+        <p class="overlay-title">Level<br>Complete!</p>
+        <button id="btn-next-level" class="menu-btn">Continue</button>
+    </div>
+
+    <div id="game-over" class="overlay-screen" role="dialog" aria-modal="true" hidden>
+        <p class="overlay-title">Game<br>Over</p>
+        <button id="btn-continue-level" class="menu-btn">Continue</button>
+        <button id="btn-gameover-menu" class="menu-btn">Main Menu</button>
+    </div>
+
+    <div id="victory" class="overlay-screen" role="dialog" aria-modal="true" hidden>
+        <p class="overlay-title">Victory!</p>
+        <button id="btn-victory-menu" class="menu-btn">Main Menu</button>
     </div>
 
     <div id="confirm-dialog" class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-msg" hidden>
@@ -75,6 +95,6 @@
             </div>
         </div>
     </main>
-    <script src="game.js?v=52"></script>
+    <script src="game.js?v=53"></script>
 </body>
 </html>

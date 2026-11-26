@@ -4,19 +4,25 @@
     const SPRITE_SHEET_SIZE = 666;
     const ORIENTATION_QUERY = '(orientation: landscape)';
     const TILE_SIZE = 60;
-    const LEVEL_FILES = Array.from({ length: 5 }, (_, index) =>
-        `levels/dev${String(index + 1).padStart(3, '0')}.csv?v=49`);
+    const LEVEL_FILES = Array.from({ length: 3 }, (_, index) =>
+        `levels/level${String(index + 1).padStart(3, '0')}.csv?v=50`);
     const WATER_ROTATIONS = [0, 90, 180, 270];
     const CHARACTER_SPEED_FACTOR = 0.67;
     const WATER_SPEED_FACTOR = 0.6;
+    const PLAYER_HP = 5;
+    const BOSS_HP = { m: 5, b: 10, c: 15 };
+    const HIT_FLASH_MS = 250;
+    const HIT_TREMBLE_PX = 1;
+    const LEVEL_INTRO_MS = 1000;
     const BOSS_STEP_MS = 750;
+    const BOSS_STEP_MS_FAST = 400;
     const JOYSTICK_STEP_MS = 320;
-    const BOSS_FIRE_CHANCE = 0.25;
+    const BOSS_FIRE_CHANCE_LOS = 0.7;
+    const BOSS_FIRE_CHANCE_RANDOM = 0.25;
     const PLAYER_SHOT_RANGE = 4;
     const PLAYER_SHOT_STEP_MS = 100;
     const BOSS_SHOT_STEP_MS = PLAYER_SHOT_STEP_MS / 2;
-    const BOSS_BULLET_COUNT = 3;
-    const BOSS_BULLET_SPACING = 2;
+    const BURST_SHOT_DELAY_MS = 200;
     const SHOT_FADE_MS = 120;
     const JOYSTICK_DEADZONE = 12;
     const JOYSTICK_REACH = 0.28;
@@ -128,6 +134,15 @@
         confirmDialog: document.querySelector('#confirm-dialog'),
         confirmYes: document.querySelector('#confirm-yes'),
         confirmNo: document.querySelector('#confirm-no'),
+        levelIntro: document.querySelector('#level-intro'),
+        levelIntroText: document.querySelector('#level-intro-text'),
+        levelComplete: document.querySelector('#level-complete'),
+        btnNextLevel: document.querySelector('#btn-next-level'),
+        gameOver: document.querySelector('#game-over'),
+        btnContinueLevel: document.querySelector('#btn-continue-level'),
+        btnGameoverMenu: document.querySelector('#btn-gameover-menu'),
+        victory: document.querySelector('#victory'),
+        btnVictoryMenu: document.querySelector('#btn-victory-menu'),
     };
 
     const game = {
@@ -148,11 +163,19 @@
         bossPortalLock: null,
         joystickDirection: null,
         paused: true,
-        shots: { player: null, boss: null },
+        shots: [],
+        playerHp: PLAYER_HP,
+        bossHp: BOSS_HP.b,
+        playerHitTime: null,
+        playerHitDir: null,
+        bossHitTime: null,
+        bossHitDir: null,
+        bossBurstActive: false,
+        bossBurstCount: 0,
+        bossBurstTimer: null,
+        currentLevelIndex: 0,
         playerFireFlash: null,
-        playerHitFlash: null,
         bossFireFlash: null,
-        bossHitFlash: null,
         playerSpriteBounds: null,
         bossSpriteBounds: null,
         chiliSpriteBounds: null,
@@ -243,8 +266,8 @@
         resizeCanvas();
     }
 
-    async function loadRandomLevel() {
-        const availableLevels = await Promise.all(LEVEL_FILES.map(async (path) => {
+    async function loadLevelList() {
+        const results = await Promise.all(LEVEL_FILES.map(async (path) => {
             const response = await fetch(path);
             if (response.status === 404) return null;
             if (!response.ok) {
@@ -252,14 +275,19 @@
             }
             return { path, text: await response.text() };
         }));
-        const levels = availableLevels.filter((level) => level !== null);
+        return results.filter((level) => level !== null);
+    }
+
+    async function loadLevelByIndex(index) {
+        const levels = await loadLevelList();
         if (levels.length === 0) {
             throw new Error('No preloaded levels found in the levels folder.');
         }
-
-        const selected = randomItem(levels);
+        const clamped = Math.min(index, levels.length - 1);
+        const selected = levels[clamped];
         return {
             path: selected.path,
+            levelCount: levels.length,
             ...parseLevel(selected.text, selected.path),
         };
     }
@@ -403,6 +431,10 @@
     function renderLevel() {
         clearShots();
         game.characterAnimations = { player: null, boss: null };
+        game.playerHitTime = null;
+        game.playerHitDir = null;
+        game.bossHitTime = null;
+        game.bossHitDir = null;
         buildWallDepthLayers();
         updateEntities();
     }
@@ -463,8 +495,7 @@
         context.drawImage(terrainCanvas, 0, 0, width, height);
 
         drawTopBoundary();
-        drawShot('player');
-        drawShot('boss');
+        for (const shot of game.shots) drawShotItem(shot);
         const depthLayers = [...game.wallDepthLayers];
         for (const type of ['boss', 'player']) {
             const visual = getCharacterVisual(type, now);
@@ -477,7 +508,9 @@
         for (const layer of depthLayers) layer.draw();
         context.restore();
 
-        if (Object.values(game.characterAnimations).some(Boolean)) {
+        const hasHitAnimation = (game.playerHitTime && now - game.playerHitTime < HIT_FLASH_MS)
+            || (game.bossHitTime && now - game.bossHitTime < HIT_FLASH_MS);
+        if (Object.values(game.characterAnimations).some(Boolean) || hasHitAnimation) {
             game.animationFrame = requestAnimationFrame(drawField);
         }
     }
@@ -753,11 +786,25 @@
         );
     }
 
+    function getHitTrembleOffset(type, now) {
+        const hitTime = type === 'player' ? game.playerHitTime : game.bossHitTime;
+        const hitDir = type === 'player' ? game.playerHitDir : game.bossHitDir;
+        if (!hitTime || !hitDir) return { dx: 0, dy: 0 };
+        const elapsed = now - hitTime;
+        if (elapsed >= HIT_FLASH_MS) return { dx: 0, dy: 0 };
+        if (elapsed >= HIT_FLASH_MS / 2) return { dx: 0, dy: 0 };
+        const vec = DIRECTIONS[hitDir];
+        const px = HIT_TREMBLE_PX / game.cellWidth;
+        const py = HIT_TREMBLE_PX / game.cellHeight;
+        return { dx: vec.x * px, dy: vec.y * py };
+    }
+
     function drawCharacter(type, now, visual = getCharacterVisual(type, now)) {
         const context = elements.fieldContext;
         const character = game[type];
-        const left = visual.x * game.cellWidth + visual.offsetX * game.cellWidth;
-        const top = (visual.y - CELL_TOP_OFFSET) * game.cellHeight + visual.offsetY * game.cellHeight;
+        const tremble = getHitTrembleOffset(type, now);
+        const left = (visual.x + tremble.dx) * game.cellWidth + visual.offsetX * game.cellWidth;
+        const top = (visual.y + tremble.dy - CELL_TOP_OFFSET) * game.cellHeight + visual.offsetY * game.cellHeight;
         context.save();
         context.globalAlpha = visual.opacity;
         context.imageSmoothingEnabled = type !== 'boss';
@@ -768,7 +815,7 @@
             const tight = game.playerSpriteBounds[character.direction];
             const xScale = game.cellWidth / TILE_SIZE;
             const yScale = game.cellHeight / TILE_SIZE;
-            for (const key of ['playerFireFlash', 'playerHitFlash']) {
+            for (const key of ['playerFireFlash']) {
                 const flash = game[key];
                 if (!flash) continue;
                 if (pNow < flash.until) {
@@ -776,6 +823,9 @@
                 } else {
                     game[key] = null;
                 }
+            }
+            if (game.playerHitTime && pNow - game.playerHitTime < HIT_FLASH_MS) {
+                drawFlashOverlay(context, sprite, tight, left, top, xScale, yScale, game.playerHitDir ?? 'd', true);
             }
         } else {
             const bossType = character.type ?? 'b';
@@ -791,7 +841,7 @@
             const bossHeight = sprite.height * scale;
             drawSprite(sprite, bossLeft, bossTop, bossWidth, bossHeight);
             const tight = game[boundsKey]?.[character.direction];
-            for (const key of ['bossFireFlash', 'bossHitFlash']) {
+            for (const key of ['bossFireFlash']) {
                 const flash = game[key];
                 if (!flash) continue;
                 if (pNow < flash.until) {
@@ -800,44 +850,44 @@
                     game[key] = null;
                 }
             }
+            if (game.bossHitTime && pNow - game.bossHitTime < HIT_FLASH_MS) {
+                drawFlashOverlay(context, sprite, tight, bossLeft, bossTop, scale, scale, game.bossHitDir ?? 'd', false);
+            }
         }
         context.restore();
     }
 
-    function drawShot(owner) {
-        const shot = game.shots[owner];
-        if (!shot) return;
-        const bulletCount = owner === 'boss' ? BOSS_BULLET_COUNT : 1;
-        const color = owner === 'boss' ? '#ff9a4a' : '#c6f36b';
+    function drawShotItem(shot) {
+        if (!shot || !shot.path.length) return;
+        const isPlayer = shot.owner === 'player';
+        const color = isPlayer ? '#c6f36b' : '#ff9a4a';
         const context = elements.fieldContext;
-        for (let bullet = 0; bullet < bulletCount; bullet++) {
-            const position = shot.path[shot.path.length - 1 - bullet * BOSS_BULLET_SPACING];
-            if (!position) continue;
-            const left = position.x * game.cellWidth;
-            const top = position.y * game.cellHeight;
-            context.save();
-            context.fillStyle = owner === 'boss'
-                ? 'rgba(255, 154, 74, .9)'
-                : 'rgba(198, 243, 107, .8)';
-            context.shadowColor = color;
-            context.shadowBlur = owner === 'boss' ? 10 : 14;
-            if (position.direction === 'u' || position.direction === 'd') {
-                context.fillRect(
-                    left + game.cellWidth * 0.46,
-                    top,
-                    game.cellWidth * 0.08,
-                    game.cellHeight,
-                );
-            } else {
-                context.fillRect(
-                    left,
-                    top + game.cellHeight * 0.42,
-                    game.cellWidth,
-                    game.cellHeight * 0.08,
-                );
-            }
-            context.restore();
+        const position = shot.path[shot.path.length - 1];
+        if (!position) return;
+        const left = position.x * game.cellWidth;
+        const top = position.y * game.cellHeight;
+        context.save();
+        context.fillStyle = isPlayer
+            ? 'rgba(198, 243, 107, .8)'
+            : 'rgba(255, 154, 74, .9)';
+        context.shadowColor = color;
+        context.shadowBlur = isPlayer ? 14 : 10;
+        if (position.direction === 'u' || position.direction === 'd') {
+            context.fillRect(
+                left + game.cellWidth * 0.46,
+                top,
+                game.cellWidth * 0.08,
+                game.cellHeight,
+            );
+        } else {
+            context.fillRect(
+                left,
+                top + game.cellHeight * 0.42,
+                game.cellWidth,
+                game.cellHeight * 0.08,
+            );
         }
+        context.restore();
     }
 
     function setPlayerDirection(direction) {
@@ -982,8 +1032,15 @@
 
     // Boss decisions and combat.
     function moveBoss() {
-        if (game.shots.boss || game.isBossTeleporting) return;
-        if (Math.random() < BOSS_FIRE_CHANCE) {
+        if (game.isBossTeleporting) return;
+        const bossType = game.boss.type;
+        if (bossType === 'b' && game.bossBurstActive) return;
+
+        const dx = game.player.x - game.boss.x;
+        const dy = game.player.y - game.boss.y;
+        const hasLos = dx === 0 || dy === 0;
+        const fireChance = hasLos ? BOSS_FIRE_CHANCE_LOS : BOSS_FIRE_CHANCE_RANDOM;
+        if (Math.random() < fireChance) {
             fireBoss();
             return;
         }
@@ -1047,22 +1104,50 @@
         updateEntities();
     }
 
-    function fireBoss() {
-        const dx = game.player.x - game.boss.x;
-        const dy = game.player.y - game.boss.y;
-        const direction = Math.abs(dx) > Math.abs(dy)
-            ? (dx > 0 ? 'r' : 'l')
-            : (dy > 0 ? 'd' : 'u');
-
+    function fireBossDirection(direction) {
         const until = performance.now() + FIRE_FLASH_MS;
         game.boss.direction = direction;
         game.bossFireFlash = { direction, until };
-        const vec = DIRECTIONS[direction];
-        if (isCharacterAt(game.player, game.boss.x + vec.x, game.boss.y + vec.y)) {
-            game.playerHitFlash = { direction: OPPOSITE_DIR[direction], until };
-        }
         updateEntities();
-        startShot('boss', game.boss, direction);
+        const range = game.boss.type === 'b' ? Infinity : PLAYER_SHOT_RANGE;
+        spawnShot('boss', game.boss, direction, range);
+    }
+
+    function fireBoss() {
+        const dx = game.player.x - game.boss.x;
+        const dy = game.player.y - game.boss.y;
+        const direction = Math.abs(dx) >= Math.abs(dy)
+            ? (dx >= 0 ? 'r' : 'l')
+            : (dy > 0 ? 'd' : 'u');
+
+        if (game.boss.type === 'b') {
+            if (game.bossBurstActive) return;
+            game.bossBurstActive = true;
+            game.bossBurstCount = 0;
+            fireBurstShot(direction);
+        } else {
+            fireBossDirection(direction);
+        }
+    }
+
+    function fireBurstShot(direction) {
+        if (game.paused) return;
+        fireBossDirection(direction);
+        game.bossBurstCount++;
+        if (game.bossBurstCount < 3) {
+            game.bossBurstTimer = setTimeout(() => fireBurstShot(direction), BURST_SHOT_DELAY_MS);
+        } else {
+            const waitForClear = () => {
+                const hasBossShots = game.shots.some((s) => s.owner === 'boss');
+                if (hasBossShots) {
+                    game.bossBurstTimer = setTimeout(waitForClear, 50);
+                } else {
+                    game.bossBurstActive = false;
+                    game.bossBurstCount = 0;
+                }
+            };
+            game.bossBurstTimer = setTimeout(waitForClear, 50);
+        }
     }
 
     function firePlayer() {
@@ -1070,17 +1155,13 @@
         const dir = game.player.direction;
         const until = performance.now() + FIRE_FLASH_MS;
         game.playerFireFlash = { direction: dir, until };
-        const vec = DIRECTIONS[dir];
-        if (isCharacterAt(game.boss, game.player.x + vec.x, game.player.y + vec.y)) {
-            game.bossHitFlash = { direction: OPPOSITE_DIR[dir], until };
-        }
-        startShot('player', game.player, dir, PLAYER_SHOT_RANGE);
+        spawnShot('player', game.player, dir, PLAYER_SHOT_RANGE);
     }
 
     // Projectiles advance one tile at a time; portal travel does not consume range.
-    function startShot(owner, shooter, direction, range = Infinity) {
-        clearShot(owner);
+    function spawnShot(owner, shooter, direction, range) {
         const shot = {
+            owner,
             x: shooter.x,
             y: shooter.y,
             direction,
@@ -1089,34 +1170,40 @@
             portalLock: null,
             stepMs: owner === 'boss' ? BOSS_SHOT_STEP_MS : PLAYER_SHOT_STEP_MS,
             timer: null,
+            done: false,
         };
-        game.shots[owner] = shot;
-        advanceShot(owner, shot);
+        game.shots.push(shot);
+        advanceShot(shot);
     }
 
-    function advanceShot(owner, shot) {
+    function advanceShot(shot) {
+        if (shot.done) return;
         if (shot.remainingRange <= 0) {
-            finishShot(owner, shot);
+            finishShot(shot);
             return;
         }
 
         const vector = DIRECTIONS[shot.direction];
-        if (advanceShotThroughPortal(owner, shot, vector)) return;
+        if (advanceShotThroughPortal(shot, vector)) return;
 
         const nextX = shot.x + vector.x;
         const nextY = shot.y + vector.y;
-        const characterAhead = isCharacterAt(game.player, nextX, nextY)
-            || isCharacterAt(game.boss, nextX, nextY);
-        if (!isWalkable(nextX, nextY) || characterAhead) {
-            finishShot(owner, shot);
+
+        const hitsPlayer = shot.owner !== 'player' && isCharacterAt(game.player, nextX, nextY);
+        const hitsBoss = shot.owner !== 'boss' && isCharacterAt(game.boss, nextX, nextY);
+
+        if (!isWalkable(nextX, nextY) || hitsPlayer || hitsBoss) {
+            if (hitsPlayer) applyDamage('player', shot.direction);
+            if (hitsBoss) applyDamage('boss', shot.direction);
+            finishShot(shot);
             return;
         }
 
-        shot.remainingRange--;
-        advanceShotTo(owner, shot, nextX, nextY);
+        if (shot.remainingRange !== Infinity) shot.remainingRange--;
+        advanceShotTo(shot, nextX, nextY);
     }
 
-    function advanceShotThroughPortal(owner, shot, vector) {
+    function advanceShotThroughPortal(shot, vector) {
         const portal = shot.portalLock ? null : wallPortalAt(shot.x, shot.y, vector);
         if (!portal) return false;
 
@@ -1125,7 +1212,7 @@
         if (!exit
             || isCharacterAt(game.player, exit.x, exit.y)
             || isCharacterAt(game.boss, exit.x, exit.y)) {
-            finishShot(owner, shot);
+            finishShot(shot);
             return true;
         }
 
@@ -1133,43 +1220,75 @@
         shot.y = exit.y;
         shot.direction = destination.direction;
         shot.portalLock = destination;
-        recordShotPosition(owner, shot);
+        recordShotPosition(shot);
         return true;
     }
 
-    function advanceShotTo(owner, shot, x, y) {
+    function advanceShotTo(shot, x, y) {
         shot.x = x;
         shot.y = y;
         shot.portalLock = null;
-        recordShotPosition(owner, shot);
+        recordShotPosition(shot);
     }
 
-    function recordShotPosition(owner, shot) {
+    function recordShotPosition(shot) {
         shot.path.push({ x: shot.x, y: shot.y, direction: shot.direction });
         drawField();
-        shot.timer = setTimeout(() => advanceShot(owner, shot), shot.stepMs);
+        shot.timer = setTimeout(() => advanceShot(shot), shot.stepMs);
     }
 
-    function finishShot(owner, shot) {
+    function finishShot(shot) {
+        shot.done = true;
         if (shot.path.length) {
-            shot.timer = setTimeout(() => clearShot(owner), SHOT_FADE_MS);
+            shot.timer = setTimeout(() => removeShotFromList(shot), SHOT_FADE_MS);
         } else {
-            clearShot(owner);
+            removeShotFromList(shot);
         }
+        drawField();
     }
 
-    function clearShot(owner) {
-        const shot = game.shots[owner];
-        if (!shot) return;
-
+    function removeShotFromList(shot) {
+        const index = game.shots.indexOf(shot);
+        if (index !== -1) game.shots.splice(index, 1);
         clearTimeout(shot.timer);
-        game.shots[owner] = null;
         drawField();
     }
 
     function clearShots() {
-        clearShot('player');
-        clearShot('boss');
+        for (const shot of game.shots) {
+            clearTimeout(shot.timer);
+        }
+        game.shots = [];
+        if (game.bossBurstTimer) { clearTimeout(game.bossBurstTimer); game.bossBurstTimer = null; }
+        game.bossBurstActive = false;
+        game.bossBurstCount = 0;
+    }
+
+    function applyDamage(target, shotDirection) {
+        const hitDir = OPPOSITE_DIR[shotDirection];
+        if (target === 'player') {
+            game.playerHp--;
+            game.playerHitTime = performance.now();
+            game.playerHitDir = hitDir;
+            drawField();
+            if (game.playerHp <= 0) {
+                setTimeout(showGameOver, HIT_FLASH_MS);
+            }
+        } else {
+            game.bossHp--;
+            game.bossHitTime = performance.now();
+            game.bossHitDir = hitDir;
+            drawField();
+            if (game.bossHp <= 0) {
+                const isLastLevel = game.currentLevelIndex + 1 >= (game.levelCount ?? 1);
+                setTimeout(() => {
+                    game.boss.x = -1;
+                    game.boss.y = -1;
+                    drawField();
+                    setTimeout(isLastLevel ? showVictory : showLevelComplete, HIT_FLASH_MS);
+                }, HIT_FLASH_MS);
+            }
+        }
     }
 
     // Water effects and joystick movement.
@@ -1190,14 +1309,19 @@
         return JOYSTICK_STEP_MS / movementSpeedFactor(isOnWater);
     }
 
+    function getBossStepMs() {
+        const isOnWater = game.waterTiles.has(tileKey(game.boss.x, game.boss.y));
+        const baseMs = game.boss.type === 'c' ? BOSS_STEP_MS_FAST : BOSS_STEP_MS;
+        return baseMs / movementSpeedFactor(isOnWater);
+    }
+
     function scheduleBossMove() {
         if (game.paused) return;
-        const isOnWater = game.waterTiles.has(tileKey(game.boss.x, game.boss.y));
         game.bossTimer = setTimeout(() => {
             if (game.paused) return;
             moveBoss();
             scheduleBossMove();
-        }, BOSS_STEP_MS / movementSpeedFactor(isOnWater));
+        }, getBossStepMs());
     }
 
     function scheduleJoystickMove(delay = getPlayerMoveDelay()) {
@@ -1546,6 +1670,7 @@
     function pauseGame() {
         game.paused = true;
         if (game.bossTimer) { clearTimeout(game.bossTimer); game.bossTimer = null; }
+        if (game.bossBurstTimer) { clearTimeout(game.bossBurstTimer); game.bossBurstTimer = null; }
         clearJoystickMove();
         clearKeyboardMove();
     }
@@ -1573,18 +1698,53 @@
         elements.ingameMenuBtn.hidden = false;
     }
 
-    async function loadNewLevel() {
+    function hideAllOverlays() {
+        elements.levelIntro.hidden = true;
+        elements.levelComplete.hidden = true;
+        elements.gameOver.hidden = true;
+        elements.victory.hidden = true;
+    }
+
+    function showLevelIntro(levelNumber, onDone) {
+        hideAllOverlays();
+        elements.levelIntroText.textContent = `Level ${levelNumber}`;
+        elements.levelIntro.hidden = false;
+        setTimeout(() => {
+            elements.levelIntro.hidden = true;
+            onDone();
+        }, LEVEL_INTRO_MS);
+    }
+
+    function showLevelComplete() {
+        pauseGame();
+        clearShots();
+        elements.levelComplete.hidden = false;
+    }
+
+    function showGameOver() {
+        pauseGame();
+        clearShots();
+        elements.gameOver.hidden = false;
+    }
+
+    function showVictory() {
+        pauseGame();
+        clearShots();
+        elements.victory.hidden = false;
+    }
+
+    async function loadLevelAtIndex(index) {
         if (game.bossTimer) { clearTimeout(game.bossTimer); game.bossTimer = null; }
         clearJoystickMove();
         clearKeyboardMove();
-        game.shots = { player: null, boss: null };
+        clearShots();
         game.playerFireFlash = null;
-        game.playerHitFlash = null;
         game.bossFireFlash = null;
-        game.bossHitFlash = null;
         game.terrainCanvas = null;
 
-        const level = await loadRandomLevel();
+        const level = await loadLevelByIndex(index);
+        game.currentLevelIndex = index;
+        game.levelCount = level.levelCount;
         game.columns = level.columns;
         game.rows = level.rows;
         game.walls = level.walls;
@@ -1594,6 +1754,8 @@
         game.portals = level.portals;
         game.player = level.player;
         game.boss = level.boss;
+        game.playerHp = PLAYER_HP;
+        game.bossHp = BOSS_HP[level.boss.type] ?? BOSS_HP.b;
         game.isPlayerTeleporting = false;
         game.isBossTeleporting = false;
         game.playerPortalLock = null;
@@ -1611,6 +1773,19 @@
         updateDebugStatus();
     }
 
+    async function loadNewLevel() {
+        await loadLevelAtIndex(0);
+    }
+
+    function startLevelWithIntro(index) {
+        const loadPromise = loadLevelAtIndex(index);
+        showLevelIntro(index + 1, () => {
+            void loadPromise.then(() => resumeGame()).catch((error) => {
+                console.error('Failed to load level', index, error);
+            });
+        });
+    }
+
     function bindMenuControls() {
         elements.btnNewGame.addEventListener('click', () => {
             if (!game.spriteSheet) return;
@@ -1618,10 +1793,8 @@
             if (hasActiveGame) {
                 elements.confirmDialog.hidden = false;
             } else {
-                void loadNewLevel().then(() => {
-                    hideStartMenu();
-                    resumeGame();
-                });
+                hideStartMenu();
+                startLevelWithIntro(0);
             }
         });
 
@@ -1633,10 +1806,8 @@
 
         elements.confirmYes.addEventListener('click', () => {
             elements.confirmDialog.hidden = true;
-            void loadNewLevel().then(() => {
-                hideStartMenu();
-                resumeGame();
-            });
+            hideStartMenu();
+            startLevelWithIntro(0);
         });
 
         elements.confirmNo.addEventListener('click', () => {
@@ -1645,6 +1816,31 @@
 
         elements.ingameMenuBtn.addEventListener('click', () => {
             showStartMenu(true);
+        });
+
+        elements.btnNextLevel.addEventListener('click', () => {
+            hideAllOverlays();
+            const nextIndex = game.currentLevelIndex + 1;
+            if (nextIndex >= game.levelCount) {
+                showVictory();
+            } else {
+                startLevelWithIntro(nextIndex);
+            }
+        });
+
+        elements.btnContinueLevel.addEventListener('click', () => {
+            hideAllOverlays();
+            startLevelWithIntro(game.currentLevelIndex);
+        });
+
+        elements.btnGameoverMenu.addEventListener('click', () => {
+            hideAllOverlays();
+            showStartMenu(false);
+        });
+
+        elements.btnVictoryMenu.addEventListener('click', () => {
+            hideAllOverlays();
+            showStartMenu(false);
         });
     }
 
